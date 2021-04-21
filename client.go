@@ -548,9 +548,9 @@ func (cli *Client) SetStatus(presence, status string) (err error) {
 
 // SendMessageEvent sends a message event into a room. See http://matrix.org/docs/spec/client_server/r0.2.0.html#put-matrix-client-r0-rooms-roomid-send-eventtype-txnid
 // contentJSON should be a pointer to something that can be encoded as JSON using json.Marshal.
-func (cli *Client) SendMessageEvent(roomID string, eventType string, contentJSON interface{}) (resp *RespSendEvent, err error) {
+func (cli *Client) SendMessageEvent(roomID string, eventType EventType, contentJSON interface{}) (resp *RespSendEvent, err error) {
 	txnID := txnID()
-	urlPath := cli.BuildURL("rooms", roomID, "send", eventType, txnID)
+	urlPath := cli.BuildURL("rooms", roomID, "send", eventType.String(), txnID)
 	err = cli.MakeRequest(http.MethodPut, urlPath, contentJSON, &resp)
 	return
 }
@@ -566,21 +566,21 @@ func (cli *Client) SendStateEvent(roomID, eventType, stateKey string, contentJSO
 // SendText sends an m.room.message event into the given room with a msgtype of m.text
 // See http://matrix.org/docs/spec/client_server/r0.2.0.html#m-text
 func (cli *Client) SendText(roomID, text string) (*RespSendEvent, error) {
-	return cli.SendMessageEvent(roomID, "m.room.message",
+	return cli.SendMessageEvent(roomID, MessageEventType,
 		TextMessage{MsgType: TextMessageType, Body: text})
 }
 
 // SendFormattedText sends an m.room.message event into the given room with a msgtype of m.text, supports a subset of HTML for formatting.
 // See https://matrix.org/docs/spec/client_server/r0.6.0#m-text
 func (cli *Client) SendFormattedText(roomID, text, formattedText string) (*RespSendEvent, error) {
-	return cli.SendMessageEvent(roomID, "m.room.message",
+	return cli.SendMessageEvent(roomID, MessageEventType,
 		TextMessage{MsgType: TextMessageType, Body: text, FormattedBody: formattedText, Format: "org.matrix.custom.html"})
 }
 
 // SendImage sends an m.room.message event into the given room with a msgtype of m.image
 // See https://matrix.org/docs/spec/client_server/r0.2.0.html#m-image
 func (cli *Client) SendImage(roomID, body, url string) (*RespSendEvent, error) {
-	return cli.SendMessageEvent(roomID, "m.room.message",
+	return cli.SendMessageEvent(roomID, MessageEventType,
 		ImageMessage{
 			MsgType: ImageMessageType,
 			Body:    body,
@@ -591,7 +591,7 @@ func (cli *Client) SendImage(roomID, body, url string) (*RespSendEvent, error) {
 // SendVideo sends an m.room.message event into the given room with a msgtype of m.video
 // See https://matrix.org/docs/spec/client_server/r0.2.0.html#m-video
 func (cli *Client) SendVideo(roomID, body, url string) (*RespSendEvent, error) {
-	return cli.SendMessageEvent(roomID, "m.room.message",
+	return cli.SendMessageEvent(roomID, MessageEventType,
 		VideoMessage{
 			MsgType: VideoMessageType,
 			Body:    body,
@@ -602,7 +602,7 @@ func (cli *Client) SendVideo(roomID, body, url string) (*RespSendEvent, error) {
 // SendNotice sends an m.room.message event into the given room with a msgtype of m.notice
 // See http://matrix.org/docs/spec/client_server/r0.2.0.html#m-notice
 func (cli *Client) SendNotice(roomID, text string) (*RespSendEvent, error) {
-	return cli.SendMessageEvent(roomID, "m.room.message",
+	return cli.SendMessageEvent(roomID, MessageEventType,
 		TextMessage{MsgType: NoticeMessageType, Body: text})
 }
 
@@ -691,8 +691,8 @@ func (cli *Client) UserTyping(roomID string, typing bool, timeout int64) (resp *
 // StateEvent gets a single state event in a room. It will attempt to JSON unmarshal into the given "outContent" struct with
 // the HTTP response body, or return an error.
 // See http://matrix.org/docs/spec/client_server/r0.2.0.html#get-matrix-client-r0-rooms-roomid-state-eventtype-statekey
-func (cli *Client) StateEvent(roomID, eventType, stateKey string, outContent interface{}) (err error) {
-	u := cli.BuildURL("rooms", roomID, "state", eventType, stateKey)
+func (cli *Client) StateEvent(roomID string, eventType EventType, stateKey string, outContent interface{}) (err error) {
+	u := cli.BuildURL("rooms", roomID, "state", eventType.String(), stateKey)
 	err = cli.MakeRequest(http.MethodGet, u, nil, outContent)
 	return
 }
@@ -791,6 +791,40 @@ func (cli *Client) Messages(roomID, from, to string, dir rune, limit int) (resp 
 
 	urlPath := cli.BuildURLWithQuery([]string{"rooms", roomID, "messages"}, query)
 	err = cli.MakeRequest(http.MethodGet, urlPath, nil, &resp)
+	return
+}
+
+// CreateRoomAlias create a new mapping from room alias to room ID.
+// See https://matrix.org/docs/spec/client_server/r0.6.1#put-matrix-client-r0-directory-room-roomalias
+func (cli *Client) CreateRoomAlias(alias string, req *ReqCreateRoomAlias) error {
+	urlPath := cli.BuildURL("directory", "room", alias)
+	return cli.MakeRequest(http.MethodPut, urlPath, req, nil)
+}
+
+// ResolveRoomsIDs requests that the server resolve a room alias to a room ID.
+// The server will use the federation API to resolve the alias if the domain part of the alias does not correspond to the server's own domain.
+// See https://matrix.org/docs/spec/client_server/r0.6.1#get-matrix-client-r0-directory-room-roomalias
+func (cli *Client) ResolveRoomsIDs(alias string) (resp *RespResolveRoomsIDs, err error) {
+	urlPath := cli.BuildURL("directory", "room", alias)
+	err = cli.MakeRequest(http.MethodGet, urlPath, nil, resp)
+	return
+}
+
+// DeleteRoomAlias remove a mapping of room alias to room ID.
+// Servers may choose to implement additional access control checks here, for instance that room aliases can only be deleted by their creator or a server administrator.
+// See https://matrix.org/docs/spec/client_server/r0.6.1#delete-matrix-client-r0-directory-room-roomalias
+func (cli *Client) DeleteRoomAlias(alias string) error {
+	urlPath := cli.BuildURL("directory", "room", alias)
+	return cli.MakeRequest(http.MethodDelete, urlPath, nil, nil)
+}
+
+// RoomAliases get a list of aliases maintained by the local server for the given room.
+// This endpoint can be called by users who are in the room (external users receive an M_FORBIDDEN error response). If the room's m.room.history_visibility maps to world_readable, any user can call this endpoint.
+// Servers may choose to implement additional access control checks here, such as allowing server administrators to view aliases regardless of membership.
+// See https://matrix.org/docs/spec/client_server/r0.6.1#get-matrix-client-r0-rooms-roomid-aliases
+func (cli *Client) RoomAliases(roomID string) (resp *RespRoomAliases, err error) {
+	urlPath := cli.BuildURL("directory", roomID, "aliases")
+	err = cli.MakeRequest(http.MethodGet, urlPath, nil, resp)
 	return
 }
 
