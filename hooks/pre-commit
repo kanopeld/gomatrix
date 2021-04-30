@@ -2,9 +2,11 @@
 
 set -eu
 
+GOFILES=$(find . -type f -name '*.go' -not -path "./vendor/*")
+
 # gofmt doesn't exit with an error code if the files don't match the expected
 # format. So we have to run it and see if it outputs anything.
-if gofmt -l -s . 2>&1 | read
+if gofmt -l -s $GOFILES 2>&1 | read
 then
     echo "Error: not all code had been formatted with gofmt."
     echo "Fixing the following files"
@@ -15,5 +17,4 @@ then
     exit 1
 fi
 
-golangci-lint run
-go test -timeout 5s . ./...
+golangci-lint run --skip-dirs-use-default

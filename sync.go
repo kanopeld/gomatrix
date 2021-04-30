@@ -9,7 +9,7 @@ import (
 
 // Syncer represents an interface that must be satisfied in order to do /sync requests on a client.
 type Syncer interface {
-	// Process the /sync response. The since parameter is the since= value that was used to produce the response.
+	// ProcessResponse process the /sync response. The since parameter is the since= value that was used to produce the response.
 	// This is useful for detecting the very first sync (since=""). If an error is return, Syncing will be stopped
 	// permanently.
 	ProcessResponse(resp *RespSync, since string) error
@@ -23,20 +23,15 @@ type Syncer interface {
 // replace parts of this default syncer (e.g. the ProcessResponse method). The default syncer uses the observer
 // pattern to notify callers about incoming events. See DefaultSyncer.OnEventType for more information.
 type DefaultSyncer struct {
-	UserID    string
-	Store     Storer
-	listeners map[EventType][]OnEventListener // event type to listeners array
+	UserID     string
+	eventsChan chan<- *Event
 }
 
-// OnEventListener can be used with DefaultSyncer.OnEventType to be informed of incoming events.
-type OnEventListener func(*Event)
-
 // NewDefaultSyncer returns an instantiated DefaultSyncer
-func NewDefaultSyncer(userID string, store Storer) *DefaultSyncer {
+func NewDefaultSyncer(userID string, eventsChan chan<- *Event) *DefaultSyncer {
 	return &DefaultSyncer{
-		UserID:    userID,
-		Store:     store,
-		listeners: make(map[EventType][]OnEventListener),
+		UserID:     userID,
+		eventsChan: eventsChan,
 	}
 }
 
@@ -53,51 +48,40 @@ func (s *DefaultSyncer) ProcessResponse(res *RespSync, since string) (err error)
 		}
 	}()
 
+	for _, e := range res.AccountData.Events {
+		s.eventsChan <- &e
+	}
+	for _, e := range res.Presence.Events {
+		s.eventsChan <- &e
+	}
+
 	for roomID, roomData := range res.Rooms.Join {
-		room := s.getOrCreateRoom(roomID)
 		for _, event := range roomData.State.Events {
 			event.RoomID = roomID
-			room.UpdateState(&event)
-			s.notifyListeners(&event)
+			s.eventsChan <- &event
 		}
 		for _, event := range roomData.Timeline.Events {
 			event.RoomID = roomID
-			s.notifyListeners(&event)
+			s.eventsChan <- &event
 		}
 		for _, event := range roomData.Ephemeral.Events {
 			event.RoomID = roomID
-			s.notifyListeners(&event)
+			s.eventsChan <- &event
 		}
 	}
 	for roomID, roomData := range res.Rooms.Invite {
-		room := s.getOrCreateRoom(roomID)
 		for _, event := range roomData.State.Events {
 			event.RoomID = roomID
-			room.UpdateState(&event)
-			s.notifyListeners(&event)
+			s.eventsChan <- &event
 		}
 	}
 	for roomID, roomData := range res.Rooms.Leave {
-		room := s.getOrCreateRoom(roomID)
 		for _, event := range roomData.Timeline.Events {
-			if event.StateKey != nil {
-				event.RoomID = roomID
-				room.UpdateState(&event)
-				s.notifyListeners(&event)
-			}
+			event.RoomID = roomID
+			s.eventsChan <- &event
 		}
 	}
 	return
-}
-
-// OnEventType allows callers to be notified when there are new events for the given event type.
-// There are no duplicate checks.
-func (s *DefaultSyncer) OnEventType(eventType EventType, callback OnEventListener) {
-	_, exists := s.listeners[eventType]
-	if !exists {
-		s.listeners[eventType] = []OnEventListener{}
-	}
-	s.listeners[eventType] = append(s.listeners[eventType], callback)
 }
 
 // shouldProcessResponse returns true if the response should be processed. May modify the response to remove
@@ -123,7 +107,7 @@ func (s *DefaultSyncer) shouldProcessResponse(resp *RespSync, since string) bool
 					continue
 				}
 				if mship == "join" {
-					_, ok := resp.Rooms.Join[roomID]
+					_, ok = resp.Rooms.Join[roomID]
 					if !ok {
 						continue
 					}
@@ -135,26 +119,6 @@ func (s *DefaultSyncer) shouldProcessResponse(resp *RespSync, since string) bool
 		}
 	}
 	return true
-}
-
-// getOrCreateRoom must only be called by the Sync() goroutine which calls ProcessResponse()
-func (s *DefaultSyncer) getOrCreateRoom(roomID string) *Room {
-	room := s.Store.LoadRoom(roomID)
-	if room == nil { // create a new Room
-		room = NewRoom(roomID)
-		s.Store.SaveRoom(room)
-	}
-	return room
-}
-
-func (s *DefaultSyncer) notifyListeners(event *Event) {
-	listeners, exists := s.listeners[event.Type]
-	if !exists {
-		return
-	}
-	for _, fn := range listeners {
-		fn(event)
-	}
 }
 
 // OnFailedSync always returns a 10 second wait period between failed /syncs, never a fatal error.
